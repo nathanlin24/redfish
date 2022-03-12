@@ -4,6 +4,7 @@
 #                 and print this in a tabulated list
 # Prerequisites : nmap binary needs to be installed and pip install python-nmap
 # Usage         : python hpescan.py -s 192.168.2.0/24 
+#               : python hpescan.py -s 192.168.2.0/24 -x 
 #
 
 import requests
@@ -12,6 +13,7 @@ import argparse
 import os
 import json
 from tabulate import tabulate
+import xmltodict
 
 import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
@@ -86,7 +88,8 @@ def buildArguments():
     ap = None
     ap = argparse.ArgumentParser(description='This script scans the network for HPE iLOs and discovers them')
     ap.add_argument("-s", "--subnet",   dest="subnet", help="subnet", required=True)
-    ap.add_argument("-i", "--ip",   dest="ip", help="subnet")
+    ap.add_argument("-i", "--ip",   dest="ip", help="IP pool")
+    ap.add_argument("-x", "--xml",  dest="xml", action='store_true', help="xmldata")
 
     return ap
 
@@ -107,6 +110,33 @@ def discoveriLO(iLO):
     else:
         return None
 
+def parseXMLDict(xmlDict):
+    retDict = {
+        "SerialNumber" : xmlDict['RIMP']['HSI']['SBSN'],
+        "Product" : xmlDict['RIMP']['HSI']['SPN'],
+        "Hostname" : xmlDict['RIMP']['MP']['SN'],
+        "Type" : xmlDict['RIMP']['MP']['PN'],
+        "FW" : xmlDict['RIMP']['MP']['FWRI']
+    }
+
+    if 'NICS' in xmlDict.keys():
+        retDict['NICS'] = xmlDict['RIMP']['HSI']['NICS']
+    
+    return retDict
+
+
+def discoveriLOXML(iLO):    
+    resource = "/xmldata?item=all"
+    url = "http://" + iLO + resource
+
+    response = requests.get(url)
+
+    xmlDict = xmltodict.parse(response.content)
+
+    retDict = parseXMLDict(xmlDict)
+
+    return retDict
+    
 def buildOutput(responseObj):    
     retDict = {
         "Vendor" : responseObj['Vendor'], 
@@ -119,6 +149,7 @@ def buildOutput(responseObj):
 
     return retDict
 
+# Main function
 def main():
     # Review arguments
     args = buildArguments().parse_args()
@@ -130,16 +161,25 @@ def main():
 
     outDict = []
 
-    for iLO in iLOs:
-        print("iLO : %s" % iLO)
-        retObj = discoveriLO(iLO)
-        if retObj is not None:
-            retDict = buildOutput(retObj)
-            retDict['iLO'] = iLO
-            outDict.append(retDict)
+    if args.xml:
+        for iLO in iLOs:
+            print("iLO : %s" % iLO)
+            retObj = discoveriLOXML(iLO)
+            if retObj is not None:                
+                retObj['iLO'] = iLO
+                outDict.append(retObj)            
+    else:
+        for iLO in iLOs:
+            print("iLO : %s" % iLO)
+            retObj = discoveriLO(iLO)
+            if retObj is not None:
+                retDict = buildOutput(retObj)
+                retDict['iLO'] = iLO
+                outDict.append(retDict)
         
     print(tabulate(outDict,headers='keys',showindex=True))                  
-  
+
+# Startup
 if __name__ == "__main__":
 	import sys
 	sys.exit(main())  
