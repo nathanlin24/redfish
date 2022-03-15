@@ -8,23 +8,31 @@
 #
 
 import requests
-import nmap
+
 import argparse
 import os
 import json
 from tabulate import tabulate
-import xmltodict
+#import xmltodict
 
 import urllib3
 urllib3.disable_warnings(urllib3.exceptions.InsecureRequestWarning)
 
 def scanSubnet(subnet):
-    nm = nmap.PortScanner()
-    nm.scan(hosts=subnet,arguments='-n -sP -PE -PA17988')
-
-    print("Hosts discovered %d" % len(nm.all_hosts()))
-    
-    return nm.all_hosts()
+    import ipaddress
+    import socket
+    import threading
+    port = 17988
+    ip_network = ipaddress.ip_network(subnet)
+    for host in ip_network.hosts():
+        host = str(host)
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as socket_connector:
+            socket_connector.settimeout(2)  
+            result = socket_connector.connect_ex((host, port))
+            print(host)
+            if result == 0:
+                print(f'iLO at : {host}')
+                yield host
 
 def requestCredentials(iLO):
 
@@ -131,11 +139,36 @@ def discoveriLOXML(iLO):
 
     response = requests.get(url)
 
-    xmlDict = xmltodict.parse(response.content)
+    #xmlDict = xmltodict.parse(response.content)
+    xmlDict = xml2dict(response.content)
 
     retDict = parseXMLDict(xmlDict)
 
     return retDict
+
+def xml2dict(t):
+    from collections import defaultdict
+    from xml.etree import cElementTree as ET
+    d = {t.tag: {} if t.attrib else None}
+    children = list(t)
+    if children:
+        dd = defaultdict(list)
+        for dc in map(etree_to_dict, children):
+            for k, v in dc.items():
+                dd[k].append(v)
+        d = {t.tag: {k: v[0] if len(v) == 1 else v
+                     for k, v in dd.items()}}
+    if t.attrib:
+        d[t.tag].update(('@' + k, v)
+                        for k, v in t.attrib.items())
+    if t.text:
+        text = t.text.strip()
+        if children or t.attrib:
+            if text:
+              d[t.tag]['#text'] = text
+        else:
+            d[t.tag] = text
+    return d
     
 def buildOutput(responseObj):    
     retDict = {
@@ -157,8 +190,9 @@ def main():
     iLOs = []
 
     if args.subnet:
-        iLOs = scanSubnet(args.subnet)
-
+        for ip in scanSubnet(args.subnet):
+            iLOs.append(ip)
+    print(iLOs)
     outDict = []
 
     if args.xml:
